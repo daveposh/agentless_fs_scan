@@ -95,18 +95,16 @@ if [[ $1 == -* ]]; then
                 fi
                 echo -e "${GREEN}Reading IPs from file: $IP_FILE${NC}"
                 
-                # Read IPs from file and process each one
-                while read -r line || [ -n "$line" ]; do
-                    # Skip empty lines and comments
-                    if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
-                        # Trim whitespace
-                        ip=$(echo "$line" | tr -d '[:space:]')
-                        if [[ -n "$ip" ]]; then
-                            echo -e "${GREEN}Processing IP: $ip${NC}"
-                            collect_system_info "$ip"
-                        fi
+                # First, create an array of valid IPs from the file
+                mapfile -t ip_list < <(grep -v '^[[:space:]]*#' "$IP_FILE" | grep -v '^[[:space:]]*$' | tr -d '[:space:]')
+                
+                # Process each IP in the array
+                for ip in "${ip_list[@]}"; do
+                    if [[ -n "$ip" ]]; then
+                        echo -e "${GREEN}Processing IP: $ip${NC}"
+                        collect_system_info "$ip"
                     fi
-                done < "$IP_FILE"
+                done
                 ;;
             h|*)
                 echo "Usage: $0 [-r CIDR_RANGE | -f IP_LIST_FILE | IP_ADDRESS]"
