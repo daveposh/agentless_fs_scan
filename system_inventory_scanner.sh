@@ -30,7 +30,7 @@ collect_system_info() {
     fi
 
     # Collect system information via SSH
-    local system_info=$(ssh "$ip" "
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "
         hostname=\$(hostname)
         os=\$(cat /etc/os-release | grep 'PRETTY_NAME' | cut -d '=' -f 2 | tr -d '\"')
         os_version=\$(cat /etc/os-release | grep 'VERSION_ID' | cut -d '=' -f 2 | tr -d '\"')
@@ -52,10 +52,13 @@ collect_system_info() {
         az=''
         
         echo \"\$hostname,\$asset_type,,\$hostname,Linux Server,,true,Production,scan_agent,system,\$discovery_date,scan_agent,system,\$discovery_date,automated_scan,,,system,,,\$discovery_date,,,,,,,\$domain,\$asset_state,\$serial_number,\$discovery_date,Physical,Server,,\${region},\${az},\$os,\$os_version,\$kernel,\$memory,\$disk_space,\$cpu_speed,\$cpu_cores,\$mac_addresses,\$uuid,\$hostname,\$ip_addresses,,false,\$last_login,,,,,,,,,\$discovery_date,Server,Production,Production,,system,system\"
-    ")
+    " >> "$OUTPUT_FILE"
 
-    # Append to CSV file
-    echo "$system_info" >> "$OUTPUT_FILE"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Successfully collected information from $ip${NC}"
+    else
+        echo -e "${RED}Failed to collect information from $ip${NC}"
+    fi
 }
 
 # Create CSV file with header
@@ -92,13 +95,8 @@ if [[ $1 == -* ]]; then
                 fi
                 echo -e "${GREEN}Reading IPs from file: $IP_FILE${NC}"
                 
-                # Create CSV file with header if it doesn't exist
-                if [ ! -f "$OUTPUT_FILE" ]; then
-                    cp header.csv "$OUTPUT_FILE"
-                fi
-                
-                # Read the file and process each IP
-                while IFS= read -r line || [ -n "$line" ]; do
+                # Read IPs from file and process each one
+                while read -r line || [ -n "$line" ]; do
                     # Skip empty lines and comments
                     if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
                         # Trim whitespace
@@ -108,7 +106,7 @@ if [[ $1 == -* ]]; then
                             collect_system_info "$ip"
                         fi
                     fi
-                done < <(grep -v '^[[:space:]]*$' "$IP_FILE" | grep -v '^[[:space:]]*#')
+                done < "$IP_FILE"
                 ;;
             h|*)
                 echo "Usage: $0 [-r CIDR_RANGE | -f IP_LIST_FILE | IP_ADDRESS]"
@@ -122,8 +120,5 @@ if [[ $1 == -* ]]; then
     done
 else
     # Treat first argument as single IP address
-    if [ ! -f "$OUTPUT_FILE" ]; then
-        cp header.csv "$OUTPUT_FILE"
-    fi
     collect_system_info "$1"
 fi 
