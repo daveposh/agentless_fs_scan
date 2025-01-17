@@ -52,12 +52,13 @@ collect_system_info() {
         az=''
         
         echo \"\$hostname,\$asset_type,,\$hostname,Linux Server,,true,Production,scan_agent,system,\$discovery_date,scan_agent,system,\$discovery_date,automated_scan,,,system,,,\$discovery_date,,,,,,,\$domain,\$asset_state,\$serial_number,\$discovery_date,Physical,Server,,\${region},\${az},\$os,\$os_version,\$kernel,\$memory,\$disk_space,\$cpu_speed,\$cpu_cores,\$mac_addresses,\$uuid,\$hostname,\$ip_addresses,,false,\$last_login,,,,,,,,,\$discovery_date,Server,Production,Production,,system,system\"
-    " >> "$OUTPUT_FILE"
+    " 2>/dev/null >> "$OUTPUT_FILE"
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Successfully collected information from $ip${NC}"
     else
         echo -e "${RED}Failed to collect information from $ip${NC}"
+        return 1
     fi
 }
 
@@ -95,15 +96,21 @@ if [[ $1 == -* ]]; then
                 fi
                 echo -e "${GREEN}Reading IPs from file: $IP_FILE${NC}"
                 
-                # Process each line in the file
+                # Read all IPs into an array
+                IPS=()
                 while IFS= read -r line || [ -n "$line" ]; do
                     # Clean the line: remove trailing %, spaces, and other special characters
                     ip=$(echo "$line" | sed 's/%//g' | tr -d '[:space:]')
                     if [[ -n "$ip" && ! "$ip" =~ ^# ]]; then
-                        echo -e "${GREEN}Processing IP: $ip${NC}"
-                        collect_system_info "$ip"
+                        IPS+=("$ip")
                     fi
                 done < "$IP_FILE"
+                
+                # Process each IP
+                for ip in "${IPS[@]}"; do
+                    echo -e "${GREEN}Processing IP: $ip${NC}"
+                    collect_system_info "$ip"
+                done
                 ;;
             h|*)
                 echo "Usage: $0 [-r CIDR_RANGE | -f IP_LIST_FILE | IP_ADDRESS]"
