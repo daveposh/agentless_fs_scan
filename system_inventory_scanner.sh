@@ -1,5 +1,5 @@
 #!/bin/bash
-
+#
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'./
@@ -91,17 +91,24 @@ if [[ $1 == -* ]]; then
                     exit 1
                 fi
                 echo -e "${GREEN}Reading IPs from file: $IP_FILE${NC}"
-                # Read file line by line, ignoring empty lines and comments
+                
+                # Create CSV file with header if it doesn't exist
+                if [ ! -f "$OUTPUT_FILE" ]; then
+                    cp header.csv "$OUTPUT_FILE"
+                fi
+                
+                # Read the file and process each IP
                 while IFS= read -r line || [ -n "$line" ]; do
                     # Skip empty lines and comments
                     if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
                         # Trim whitespace
                         ip=$(echo "$line" | tr -d '[:space:]')
                         if [[ -n "$ip" ]]; then
+                            echo -e "${GREEN}Processing IP: $ip${NC}"
                             collect_system_info "$ip"
                         fi
                     fi
-                done < "$IP_FILE"
+                done < <(grep -v '^[[:space:]]*$' "$IP_FILE" | grep -v '^[[:space:]]*#')
                 ;;
             h|*)
                 echo "Usage: $0 [-r CIDR_RANGE | -f IP_LIST_FILE | IP_ADDRESS]"
@@ -115,5 +122,8 @@ if [[ $1 == -* ]]; then
     done
 else
     # Treat first argument as single IP address
+    if [ ! -f "$OUTPUT_FILE" ]; then
+        cp header.csv "$OUTPUT_FILE"
+    fi
     collect_system_info "$1"
 fi 
