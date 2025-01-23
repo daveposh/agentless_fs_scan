@@ -110,8 +110,9 @@ collect_system_info() {
     fi
 
     # Try SSH connection with key-based auth
-    if ! ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" true 2>/dev/null; then
-        echo -e "${RED}Cannot SSH to $ip${NC}"
+    echo -e "${GREEN}Testing SSH connection to $ip...${NC}"
+    if ! ssh -v -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" true 2>&1; then
+        echo -e "${RED}Cannot SSH to $ip - Please check SSH key authentication is set up${NC}"
         return 1
     fi
 
@@ -129,7 +130,8 @@ collect_system_info() {
     export DEPARTMENT="${STATIC_DATA[Department]}"
     export ENVIRONMENT="${STATIC_DATA[Environment]}"
 
-    ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "
+    echo -e "${GREEN}Collecting system information from $ip...${NC}"
+    ssh -v -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "
         hostname=\$(hostname)
         os=\$(cat /etc/os-release | grep 'PRETTY_NAME' | cut -d '=' -f 2 | tr -d '\"')
         os_version=\$(cat /etc/os-release | grep 'VERSION_ID' | cut -d '=' -f 2 | tr -d '\"')
