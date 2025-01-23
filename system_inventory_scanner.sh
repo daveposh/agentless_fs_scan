@@ -147,6 +147,19 @@ collect_system_info() {
     TMP_DIR=$(mktemp -d)
     LOCAL_SYSTEM_TMP="$TMP_DIR/system.csv"
 
+    # Get static data values before SSH
+    workspace_value="${STATIC_DATA[Workspace]}"
+    asset_type="${STATIC_DATA[Asset_Type]}"
+    impact="${STATIC_DATA[Impact]}"
+    end_of_life="${STATIC_DATA[End_of_Life]}"
+    usage_type="${STATIC_DATA[Usage_Type]}"
+    created_by="${STATIC_DATA[Created_by_-_Source]}"
+    department="${STATIC_DATA[Department]}"
+    environment="${STATIC_DATA[Environment]}"
+
+    # Debug output
+    echo "Debug: Workspace value from static data: $workspace_value"
+
     # Collect system information and software inventory in a single SSH connection
     ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "
         hostname=\$(hostname)
@@ -214,14 +227,14 @@ collect_system_info() {
         
         # Output system information
         echo \"SYSINFO:\$hostname,\
-${STATIC_DATA[Asset_Type]:-Server},\
+$asset_type,\
 \$serial_number,\
-${STATIC_DATA[Impact]:-High},\
+$impact,\
 \$description,\
-${STATIC_DATA[End_of_Life]:-},\
+$end_of_life,\
 yes,\
-${STATIC_DATA[Usage_Type]:-permanent},\
-${STATIC_DATA[Created_by_-_Source]:-System Inventory Scanner},\
+$usage_type,\
+$created_by,\
 ,\
 \$discovery_date,\
 System Inventory Scanner,\
@@ -229,12 +242,12 @@ System Inventory Scanner,\
 \$discovery_date,\
 System Inventory Scanner,\
 ,\
-${STATIC_DATA[Department]:-IT},\
+$department,\
 ,\
 ,\
 ,\
 ,\
-${STATIC_DATA[Workspace]:-My Team},\
+$workspace_value,\
 \$product,\
 ,\
 ,\
