@@ -110,7 +110,7 @@ collect_system_info() {
     fi
 
     # Try SSH connection with key-based auth
-    if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" true 2>/dev/null; then
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" true 2>/dev/null; then
         echo -e "${RED}Cannot SSH to $ip${NC}"
         return 1
     fi
@@ -127,17 +127,9 @@ collect_system_info() {
     export USAGE_TYPE="${STATIC_DATA[Usage_Type]}"
     export CREATED_BY="${STATIC_DATA[Created_by_-_Source]}"
     export DEPARTMENT="${STATIC_DATA[Department]}"
-    
-    # Ensure Environment is set to PROD if not defined
-    if [ -z "${STATIC_DATA[Environment]}" ]; then
-        export ENVIRONMENT="PROD"
-        echo "Debug: Setting default Environment = PROD"
-    else
-        export ENVIRONMENT="${STATIC_DATA[Environment]}"
-        echo "Debug: Using configured Environment = ${ENVIRONMENT}"
-    fi
+    export ENVIRONMENT="${STATIC_DATA[Environment]}"
 
-    ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "
+    ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "
         hostname=\$(hostname)
         os=\$(cat /etc/os-release | grep 'PRETTY_NAME' | cut -d '=' -f 2 | tr -d '\"')
         os_version=\$(cat /etc/os-release | grep 'VERSION_ID' | cut -d '=' -f 2 | tr -d '\"')
