@@ -98,14 +98,6 @@ collect_system_info() {
     echo "  System inventory: $OUTPUT_FILE" >&2
     echo "  Software inventory: $SOFTWARE_OUTPUT_FILE" >&2
 
-    # Test ping
-    echo "Debug: Testing ping to $ip..." >&2
-    if ! ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
-        echo -e "${RED}Host $ip is not reachable${NC}" >&2
-        return 1
-    fi
-    echo "Debug: Ping successful" >&2
-
     # Try SSH connection with key-based auth
     echo -e "${GREEN}Testing SSH connection to $ip...${NC}" >&2
     if ! ssh -v -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "echo 'SSH test successful'" 2>&1; then
