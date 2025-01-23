@@ -8,6 +8,19 @@ NC='\033[0m' # No Color
 # Output CSV file
 OUTPUT_FILE="system_inventory.csv"
 
+# Static values
+declare -A STATIC_DATA=(
+    ["Impact"]="High"
+    ["Asset_Type"]="Server"
+    ["End_of_Life"]=""
+    ["Physical_Subtype"]=""
+    ["Usage_Type"]="permanent"
+    ["Created_by_-_Source"]="System Inventory Scanner"
+    ["Department"]="IT"
+    ["Workspace"]="My Team"
+    ["Environment"]="PROD"
+)
+
 # At the start of the script, after the shebang
 # Ensure bash version >= 4 for associative arrays
 if ((BASH_VERSINFO[0] < 4)); then
@@ -22,38 +35,6 @@ declare -a BLOCKLIST
 # Function to sanitize CSV values
 sanitize_csv() {
     echo "$1" | sed 's/,/;/g' | sed 's/"/'"'"'/g'
-}
-
-# Function to read static data from config file
-read_static_data() {
-    if [ ! -f "static_data.conf" ]; then
-        echo -e "${RED}Error: static_data.conf file not found${NC}"
-        return 1
-    fi
-    
-    # Clear any existing data
-    unset STATIC_DATA
-    declare -A STATIC_DATA
-    
-    while IFS='=' read -r key value; do
-        # Skip comments and empty lines
-        [[ $key =~ ^[[:space:]]*# ]] && continue
-        [[ -z $key ]] && continue
-        
-        # Remove quotes and trim whitespace
-        key=$(echo "$key" | tr -d "'" | tr -d '"' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        value=$(echo "$value" | tr -d '"' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        
-        # Convert spaces in key to underscores for easier handling
-        key=$(echo "$key" | tr ' ' '_')
-        
-        # Only set if key is not empty
-        if [ ! -z "$key" ]; then
-            STATIC_DATA[$key]="$value"
-        fi
-    done < "static_data.conf"
-    
-    return 0
 }
 
 # Function to read blocklist
@@ -102,8 +83,14 @@ collect_system_info() {
     
     echo -e "${GREEN}Collecting information for $ip...${NC}"
     
-    # Read static data and blocklist
-    read_static_data || return 1
+    # Debug output to verify static data
+    echo "Debug: Static Data Values:"
+    echo "Workspace = ${STATIC_DATA[Workspace]}"
+    echo "Asset Type = ${STATIC_DATA[Asset_Type]}"
+    echo "Impact = ${STATIC_DATA[Impact]}"
+    echo "Environment = ${STATIC_DATA[Environment]}"
+    
+    # Read blocklist
     read_blocklist
     
     # Get hostname first to check against blocklist
@@ -147,35 +134,37 @@ collect_system_info() {
     TMP_DIR=$(mktemp -d)
     LOCAL_SYSTEM_TMP="$TMP_DIR/system.csv"
 
-    # Get static data values before SSH
-    workspace_value="${STATIC_DATA[Workspace]}"
-    asset_type="${STATIC_DATA[Asset_Type]}"
-    impact="${STATIC_DATA[Impact]}"
-    end_of_life="${STATIC_DATA[End_of_Life]}"
-    usage_type="${STATIC_DATA[Usage_Type]}"
-    created_by="${STATIC_DATA[Created_by_-_Source]}"
-    department="${STATIC_DATA[Department]}"
-    environment="${STATIC_DATA[Environment]}"
+    # Pass static data values to SSH command
+    export WORKSPACE_VALUE="${STATIC_DATA[Workspace]}"
+    export ASSET_TYPE="${STATIC_DATA[Asset_Type]}"
+    export IMPACT="${STATIC_DATA[Impact]}"
+    export END_OF_LIFE="${STATIC_DATA[End_of_Life]}"
+    export USAGE_TYPE="${STATIC_DATA[Usage_Type]}"
+    export CREATED_BY="${STATIC_DATA[Created_by_-_Source]}"
+    export DEPARTMENT="${STATIC_DATA[Department]}"
+    
+    # Ensure Environment is set to PROD if not defined
+    if [ -z "${STATIC_DATA[Environment]}" ]; then
+        export ENVIRONMENT="PROD"
+        echo "Debug: Setting default Environment = PROD"
+    else
+        export ENVIRONMENT="${STATIC_DATA[Environment]}"
+        echo "Debug: Using configured Environment = ${ENVIRONMENT}"
+    fi
 
-    # Debug output
-    echo "Debug: Workspace value from static data: $workspace_value"
-
-    # Collect system information and software inventory in a single SSH connection
     ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "
         hostname=\$(hostname)
         os=\$(cat /etc/os-release | grep 'PRETTY_NAME' | cut -d '=' -f 2 | tr -d '\"')
         os_version=\$(cat /etc/os-release | grep 'VERSION_ID' | cut -d '=' -f 2 | tr -d '\"')
         kernel=\$(uname -r)
-        # Get memory in MB and round up to nearest GB
         memory_mb=\$(free -m | awk '/^Mem:/{print \$2}')
-        memory=\$(( (memory_mb + 1023) / 1024 ))  # Round up to nearest GB
+        memory=\$(( (memory_mb + 1023) / 1024 ))
         disk_space=\$(df -BG / | awk 'NR==2 {print \$2}' | tr -d 'G')
         cpu_speed=\$(lscpu | grep 'CPU MHz' | awk '{print \$3/1000}')
         cpu_cores=\$(nproc)
         mac_addresses=\$(ip link | awk '/link\/ether/{print \$2}' | paste -sd ';' -)
         ip_addresses=\$(ip -4 addr show | grep inet | awk '{print \$2}' | cut -d '/' -f 1 | grep -v '^127\.' | paste -sd ';' -)
         
-        # Check if sudo is available and can be used without password
         if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
             serial_number=\$(sudo dmidecode -s system-serial-number 2>/dev/null || echo 'N/A')
             uuid=\$(sudo dmidecode -s system-uuid 2>/dev/null || echo 'N/A')
@@ -189,20 +178,18 @@ collect_system_info() {
         discovery_date=\$(date '+%Y-%m-%d %H:%M')
         domain=\$(dnsdomainname 2>/dev/null || echo 'N/A')
         
-        # Get system age from root filesystem creation date
         system_age=\$(date -d @\$(stat -c %W /) \"+%Y-%m-%d %H:%M\" 2>/dev/null || date -d @\$(stat -c %Y /) \"+%Y-%m-%d %H:%M\")
 
-        # Determine product based on serial number
         if [[ \"\$serial_number\" == *\"VMware\"* ]]; then
             product=\"VMware Vcenter VM\"
+            virtual_subtype=\"VMware\"
         else
             product=\"SERVER\"
+            virtual_subtype=\"\"
         fi
 
-        # Check for running services to determine server function
         if pgrep -f \"nginx\" >/dev/null; then
             server_function=\"Webserver\"
-            # Get list of enabled sites
             description=\"<p>Server Info: \$hostname (\$ip_addresses) - \$server_function</p>\"
             if [ -d \"/etc/nginx/sites-enabled\" ]; then
                 description+=\"<p>Enabled Sites:</p><ul>\"
@@ -225,29 +212,28 @@ collect_system_info() {
             description=\"<p>Server Info: \$hostname (\$ip_addresses)</p>\"
         fi
         
-        # Output system information
         echo \"SYSINFO:\$hostname,\
-$asset_type,\
+${STATIC_DATA[Asset_Type]},\
 \$serial_number,\
-$impact,\
+${STATIC_DATA[Impact]},\
 \$description,\
-$end_of_life,\
+${STATIC_DATA[End_of_Life]},\
 yes,\
-$usage_type,\
-$created_by,\
+${STATIC_DATA[Usage_Type]},\
+${STATIC_DATA[Created_by_-_Source]},\
 ,\
 \$discovery_date,\
-System Inventory Scanner,\
+${STATIC_DATA[Created_by_-_Source]},\
 ,\
 \$discovery_date,\
-System Inventory Scanner,\
+${STATIC_DATA[Created_by_-_Source]},\
 ,\
-$department,\
-,\
-,\
+${STATIC_DATA[Department]},\
 ,\
 ,\
-$workspace_value,\
+,\
+,\
+${STATIC_DATA[Workspace]},\
 \$product,\
 ,\
 ,\
@@ -255,12 +241,12 @@ $workspace_value,\
 ,\
 ,\
 \$domain,\
-${STATIC_DATA[Asset_State]:-Active},\
+Active,\
 \$serial_number,\
 \$discovery_date,\
 Server,\
-Physical,\
-,\
+${STATIC_DATA[Physical_Subtype]},\
+\$virtual_subtype,\
 ,\
 ,\
 \$os,\
@@ -285,14 +271,13 @@ Active,\
 ,\
 \$discovery_date,\
 \$server_function,\
-${STATIC_DATA[Environment]:-Production},\
-${STATIC_DATA[Usage_Type]:-permanent},\
+${STATIC_DATA[Environment]},\
+${STATIC_DATA[Usage_Type]},\
 ,\
 ,\
 ,\
 \$system_age\"
 
-        # Output software information
         echo \"SOFTWARE_START\"
         dpkg-query -W -f='\${Package},\${Version},\${Status}\n' | while IFS=',' read -r pkg version status; do
             if [[ \$status == *\"installed\"* ]]; then
