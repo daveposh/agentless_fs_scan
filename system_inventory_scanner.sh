@@ -77,44 +77,42 @@ collect_system_info() {
 
     # Check for localhost/127.0.0.1
     if [[ "$ip" == "127.0.0.1" ]] || [[ "$ip" == "localhost" ]]; then
-        echo -e "${RED}Error: Cannot use localhost/127.0.0.1. Please provide a remote IP address${NC}"
+        echo -e "${RED}Error: Cannot use localhost/127.0.0.1. Please provide a remote IP address${NC}" >&2
         return 1
     fi
     
-    echo -e "${GREEN}Collecting information for $ip...${NC}"
+    echo -e "${GREEN}Collecting information for $ip...${NC}" >&2
     
     # Debug output to verify static data
-    echo "Debug: Static Data Values:"
-    echo "Workspace = ${STATIC_DATA[Workspace]}"
-    echo "Asset Type = ${STATIC_DATA[Asset_Type]}"
-    echo "Impact = ${STATIC_DATA[Impact]}"
-    echo "Environment = ${STATIC_DATA[Environment]}"
+    echo "Debug: Static Data Values:" >&2
+    for key in "${!STATIC_DATA[@]}"; do
+        echo "  $key = ${STATIC_DATA[$key]}" >&2
+    done
     
     # Get absolute paths for files
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     OUTPUT_FILE="$SCRIPT_DIR/system_inventory.csv"
     SOFTWARE_OUTPUT_FILE="$SCRIPT_DIR/software_inventory.csv"
     
-    # Create CSV files with headers if they don't exist
-    if [ ! -f "$OUTPUT_FILE" ]; then
-        echo "Name,Asset Type,Asset Tag,Impact,Description,End of Life,Discovery Enabled,Usage Type,Created by - Source,Created by - User,Created At,Last updated by - Source,Last updated by - User,Updated At,Sources,Location,Department,Managed By,Used By,Group,Assigned on,Workspace,Product,Vendor,Cost,Warranty,Acquisition Date,Warranty Expiry Date,Domain,Asset State,Serial Number,Last Audit Date,Type,Physical Subtype,Virtual Subtype,Region,Availability Zone,OS,OS Version,OS Service Pack,Memory(GB),Disk Space(GB),CPU Speed(GHz),CPU Core Count,MAC Address,UUID,Hostname,IP Address,IP Address 2,Shared IP,Last login by,Item ID,Item Name,Public Address,State,Instance Type,Provider,Creation Timestamp,Server Function,Environment,Usage Type,Book Value($),Used by (Name),Managed by (Name),system age" > "$OUTPUT_FILE"
-    fi
-    
-    if [ ! -f "$SOFTWARE_OUTPUT_FILE" ]; then
-        echo "hostname,product,version,location" > "$SOFTWARE_OUTPUT_FILE"
-    fi
+    echo "Debug: Using output files:" >&2
+    echo "  System inventory: $OUTPUT_FILE" >&2
+    echo "  Software inventory: $SOFTWARE_OUTPUT_FILE" >&2
 
+    # Test ping
+    echo "Debug: Testing ping to $ip..." >&2
     if ! ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
-        echo -e "${RED}Host $ip is not reachable${NC}"
+        echo -e "${RED}Host $ip is not reachable${NC}" >&2
         return 1
     fi
+    echo "Debug: Ping successful" >&2
 
     # Try SSH connection with key-based auth
-    echo -e "${GREEN}Testing SSH connection to $ip...${NC}"
-    if ! ssh -v -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" true 2>&1; then
-        echo -e "${RED}Cannot SSH to $ip - Please check SSH key authentication is set up${NC}"
+    echo -e "${GREEN}Testing SSH connection to $ip...${NC}" >&2
+    if ! ssh -v -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "echo 'SSH test successful'" 2>&1; then
+        echo -e "${RED}Cannot SSH to $ip - Please check SSH key authentication is set up${NC}" >&2
         return 1
     fi
+    echo "Debug: SSH test successful" >&2
 
     # Create a temporary directory for output
     TMP_DIR=$(mktemp -d)
