@@ -234,7 +234,7 @@ ${STATIC_DATA[Department]:-IT},\
 ,\
 ,\
 ,\
-${STATIC_DATA[Workspace]:-My Workspace},\
+${STATIC_DATA[Workspace]:-My Team},\
 \$product,\
 ,\
 ,\
