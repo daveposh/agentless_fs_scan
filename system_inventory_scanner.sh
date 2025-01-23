@@ -90,21 +90,6 @@ collect_system_info() {
     echo "Impact = ${STATIC_DATA[Impact]}"
     echo "Environment = ${STATIC_DATA[Environment]}"
     
-    # Read blocklist
-    read_blocklist
-    
-    # Get hostname first to check against blocklist
-    remote_hostname=$(ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$ip" "hostname" 2>/dev/null)
-    
-    if [ $? -eq 0 ]; then
-        if is_blocked "$remote_hostname"; then
-            echo -e "${GREEN}Skipping blocked hostname: $remote_hostname${NC}"
-            return 0
-        fi
-    else
-        echo -e "${RED}Failed to get remote hostname${NC}"
-    fi
-    
     # Get absolute paths for files
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     OUTPUT_FILE="$SCRIPT_DIR/system_inventory.csv"
