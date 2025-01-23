@@ -123,7 +123,11 @@ collect_system_info() {
     OUTPUT_FILE="$SCRIPT_DIR/system_inventory.csv"
     SOFTWARE_OUTPUT_FILE="$SCRIPT_DIR/software_inventory.csv"
     
-    # Create software inventory CSV header if it doesn't exist
+    # Create CSV files with headers if they don't exist
+    if [ ! -f "$OUTPUT_FILE" ]; then
+        echo "Name,Asset Type,Asset Tag,Impact,Description,End of Life,Discovery Enabled,Usage Type,Created by - Source,Created by - User,Created At,Last updated by - Source,Last updated by - User,Updated At,Sources,Location,Department,Managed By,Used By,Group,Assigned on,Workspace,Product,Vendor,Cost,Warranty,Acquisition Date,Warranty Expiry Date,Domain,Asset State,Serial Number,Last Audit Date,Type,Physical Subtype,Virtual Subtype,Region,Availability Zone,OS,OS Version,OS Service Pack,Memory(GB),Disk Space(GB),CPU Speed(GHz),CPU Core Count,MAC Address,UUID,Hostname,IP Address,IP Address 2,Shared IP,Last login by,Item ID,Item Name,Public Address,State,Instance Type,Provider,Creation Timestamp,Server Function,Environment,Usage Type,Book Value($),Used by (Name),Managed by (Name),system age" > "$OUTPUT_FILE"
+    fi
+    
     if [ ! -f "$SOFTWARE_OUTPUT_FILE" ]; then
         echo "hostname,product,version,location" > "$SOFTWARE_OUTPUT_FILE"
     fi
@@ -149,7 +153,9 @@ collect_system_info() {
         os=\$(cat /etc/os-release | grep 'PRETTY_NAME' | cut -d '=' -f 2 | tr -d '\"')
         os_version=\$(cat /etc/os-release | grep 'VERSION_ID' | cut -d '=' -f 2 | tr -d '\"')
         kernel=\$(uname -r)
-        memory=\$(free -g | awk '/^Mem:/{print \$2}')
+        # Get memory in MB and round up to nearest GB
+        memory_mb=\$(free -m | awk '/^Mem:/{print \$2}')
+        memory=\$(( (memory_mb + 1023) / 1024 ))  # Round up to nearest GB
         disk_space=\$(df -BG / | awk 'NR==2 {print \$2}' | tr -d 'G')
         cpu_speed=\$(lscpu | grep 'CPU MHz' | awk '{print \$3/1000}')
         cpu_cores=\$(nproc)
@@ -172,31 +178,97 @@ collect_system_info() {
         
         # Get system age from root filesystem creation date
         system_age=\$(date -d @\$(stat -c %W /) \"+%m-%d-%Y\" 2>/dev/null || date -d @\$(stat -c %Y /) \"+%m-%d-%Y\")
+
+        # Check for running services to determine server function
+        if pgrep -f \"nginx\" >/dev/null; then
+            server_function=\"Webserver\"
+            # Get list of enabled sites
+            description=\"Server Info: \$hostname (\$ip_addresses) - \$server_function\\n\"
+            if [ -d \"/etc/nginx/sites-enabled\" ]; then
+                description+=\"Enabled Sites:\\n\"
+                for site in /etc/nginx/sites-enabled/*; do
+                    if [ -f \"\$site\" ]; then
+                        site_name=\$(basename \"\$site\")
+                        server_name=\$(grep -h \"server_name\" \"\$site\" 2>/dev/null | head -1 | sed 's/server_name//g' | tr -d ';' | xargs)
+                        description+=\"- \$site_name (\$server_name)\\n\"
+                    fi
+                done
+            else
+                description+=\"No sites-enabled directory found\"
+            fi
+        elif pgrep -f \"mysqld\" >/dev/null || pgrep -f \"mariadbd\" >/dev/null; then
+            server_function=\"Database\"
+            description=\"Server Info: \$hostname (\$ip_addresses) - \$server_function\"
+        else
+            server_function=\"\"
+            description=\"Server Info: \$hostname (\$ip_addresses)\"
+        fi
         
         # Output system information
         echo \"SYSINFO:\$hostname,\
 ${STATIC_DATA[Asset_Type]:-Server},\
+\$serial_number,\
+${STATIC_DATA[Impact]:-High},\
+\$description,\
+${STATIC_DATA[End_of_Life]:-},\
+yes,\
+${STATIC_DATA[Usage_Type]:-permanent},\
+${STATIC_DATA[Created_by_-_Source]:-System Inventory Scanner},\
+,\
+\$discovery_date,\
+System Inventory Scanner,\
+,\
+\$discovery_date,\
+System Inventory Scanner,\
+,\
+${STATIC_DATA[Department]:-IT},\
+,\
+,\
+,\
+,\
+${STATIC_DATA[Workspace]:-My Workspace},\
+,\
+,\
+,\
+,\
+,\
+,\
+\$domain,\
+${STATIC_DATA[Asset_State]:-Active},\
+\$serial_number,\
+\$discovery_date,\
+Server,\
+Physical,\
+,\
+,\
+,\
 \$os,\
 \$os_version,\
-\$kernel,\
+,\
 \$memory,\
 \$disk_space,\
 \$cpu_speed,\
 \$cpu_cores,\
 \$mac_addresses,\
-\$ip_addresses,\
-\$serial_number,\
 \$uuid,\
+\$hostname,\
+\$ip_addresses,\
+,\
+,\
 \$last_login,\
+,\
+,\
+,\
+Active,\
+,\
+,\
 \$discovery_date,\
-\$domain,\
-${STATIC_DATA[Asset_State]:-Active},\
-${STATIC_DATA[Impact]:-High},\
-${STATIC_DATA[Usage_Type]:-permanent},\
-${STATIC_DATA[Created_by_-_Source]:-System Inventory Scanner},\
-${STATIC_DATA[Department]:-IT},\
-${STATIC_DATA[Workspace]:-My Workspace},\
+\$server_function,\
 ${STATIC_DATA[Environment]:-Production},\
+${STATIC_DATA[Usage_Type]:-permanent},\
+,\
+,\
+,\
 \$system_age\"
 
         # Output software information
@@ -227,11 +299,6 @@ ${STATIC_DATA[Environment]:-Production},\
         fi
     done
 
-    # Create header if file doesn't exist or is empty
-    if [ ! -f "$OUTPUT_FILE" ] || [ ! -s "$OUTPUT_FILE" ]; then
-        echo "hostname,asset_type,os,os_version,kernel,memory,disk_space,cpu_speed,cpu_cores,mac_addresses,ip_addresses,serial_number,uuid,last_login,discovery_date,domain,asset_state,impact,usage_type,created_by,department,workspace,environment,system_age" > "$OUTPUT_FILE"
-    fi
-
     # Append system information if collected
     if [ -s "$LOCAL_SYSTEM_TMP" ]; then
         cat "$LOCAL_SYSTEM_TMP" >> "$OUTPUT_FILE"
@@ -245,18 +312,6 @@ ${STATIC_DATA[Environment]:-Production},\
     # Cleanup
     rm -rf "$TMP_DIR"
 }
-
-# Ensure header.csv exists and has content
-if [ ! -f "header.csv" ]; then
-    echo "hostname,asset_type,os,os_version,kernel,memory,disk_space,cpu_speed,cpu_cores,mac_addresses,ip_addresses,serial_number,uuid,last_login,discovery_date,domain,asset_state,impact,usage_type,created_by,department,workspace,environment" > "header.csv"
-fi
-
-# Create CSV file with header if it doesn't exist
-if [ ! -f "$OUTPUT_FILE" ]; then
-    cp header.csv "$OUTPUT_FILE"
-elif [ ! -s "$OUTPUT_FILE" ]; then
-    cp header.csv "$OUTPUT_FILE"
-fi
 
 # Check if no arguments provided
 if [ $# -eq 0 ]; then
