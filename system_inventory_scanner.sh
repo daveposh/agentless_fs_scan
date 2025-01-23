@@ -173,35 +173,43 @@ collect_system_info() {
         fi
         
         last_login=\$(last -1 -R | head -1 | awk '{print \$1}')
-        discovery_date=\$(date '+%Y-%m-%d %H:%M:%S')
+        discovery_date=\$(date '+%Y-%m-%d %H:%M')
         domain=\$(dnsdomainname 2>/dev/null || echo 'N/A')
         
         # Get system age from root filesystem creation date
-        system_age=\$(date -d @\$(stat -c %W /) \"+%m-%d-%Y\" 2>/dev/null || date -d @\$(stat -c %Y /) \"+%m-%d-%Y\")
+        system_age=\$(date -d @\$(stat -c %W /) \"+%Y-%m-%d %H:%M\" 2>/dev/null || date -d @\$(stat -c %Y /) \"+%Y-%m-%d %H:%M\")
+
+        # Determine product based on serial number
+        if [[ \"\$serial_number\" == *\"VMware\"* ]]; then
+            product=\"VMware Vcenter VM\"
+        else
+            product=\"SERVER\"
+        fi
 
         # Check for running services to determine server function
         if pgrep -f \"nginx\" >/dev/null; then
             server_function=\"Webserver\"
             # Get list of enabled sites
-            description=\"Server Info: \$hostname (\$ip_addresses) - \$server_function\\n\"
+            description=\"<p>Server Info: \$hostname (\$ip_addresses) - \$server_function</p>\"
             if [ -d \"/etc/nginx/sites-enabled\" ]; then
-                description+=\"Enabled Sites:\\n\"
+                description+=\"<p>Enabled Sites:</p><ul>\"
                 for site in /etc/nginx/sites-enabled/*; do
                     if [ -f \"\$site\" ]; then
                         site_name=\$(basename \"\$site\")
                         server_name=\$(grep -h \"server_name\" \"\$site\" 2>/dev/null | head -1 | sed 's/server_name//g' | tr -d ';' | xargs)
-                        description+=\"- \$site_name (\$server_name)\\n\"
+                        description+=\"<li>\$site_name (\$server_name)</li>\"
                     fi
                 done
+                description+=\"</ul>\"
             else
-                description+=\"No sites-enabled directory found\"
+                description+=\"<p>No sites-enabled directory found</p>\"
             fi
         elif pgrep -f \"mysqld\" >/dev/null || pgrep -f \"mariadbd\" >/dev/null; then
             server_function=\"Database\"
-            description=\"Server Info: \$hostname (\$ip_addresses) - \$server_function\"
+            description=\"<p>Server Info: \$hostname (\$ip_addresses) - \$server_function</p>\"
         else
             server_function=\"\"
-            description=\"Server Info: \$hostname (\$ip_addresses)\"
+            description=\"<p>Server Info: \$hostname (\$ip_addresses)</p>\"
         fi
         
         # Output system information
@@ -227,7 +235,7 @@ ${STATIC_DATA[Department]:-IT},\
 ,\
 ,\
 ${STATIC_DATA[Workspace]:-My Workspace},\
-,\
+\$product,\
 ,\
 ,\
 ,\
