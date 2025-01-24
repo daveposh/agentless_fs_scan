@@ -317,10 +317,20 @@ permanent,\
 \$system_age\"
 
             echo \"SOFTWARE_START\"
+            # Get installed packages and their versions
             dpkg-query -W -f='\${Package},\${Version},\${Status}\n' 2>/dev/null | while IFS=',' read -r pkg version status; do
                 if [[ \"\$status\" == *\"installed\"* ]]; then
-                    location=\$(dpkg -L \"\$pkg\" 2>/dev/null | grep -m 1 '/usr/bin\|/usr/sbin\|/usr/local/bin' || echo 'N/A')
-                    echo \"\$hostname,\$pkg,\$version,\$location\" 2>/dev/null
+                    # Get the package location (first executable found)
+                    location=\$(dpkg -L \"\$pkg\" 2>/dev/null | grep -m 1 '^/usr/s\?bin/[^/]*$' || echo 'N/A')
+                    
+                    # Get package description
+                    description=\$(dpkg-query -W -f='\${Description}' \"\$pkg\" 2>/dev/null | head -n1 || echo 'N/A')
+                    
+                    # Clean and format the version
+                    clean_version=\$(echo \"\$version\" | tr -d ' ' | sed 's/[[:space:]]//g')
+                    
+                    # Output in CSV format with proper escaping
+                    echo \"\$hostname,\$pkg,\$clean_version,\$location\"
                 fi
             done
             echo \"SOFTWARE_END\"
@@ -337,7 +347,7 @@ permanent,\
     if [ ! -f "$SOFTWARE_OUTPUT_FILE" ]; then
         # Add UTF-8 BOM and header
         printf '\xEF\xBB\xBF' > "$SOFTWARE_OUTPUT_FILE"
-        echo "hostname,product,version,location" >> "$SOFTWARE_OUTPUT_FILE"
+        echo "hostname,product,version,location" > "$SOFTWARE_OUTPUT_FILE"
     fi
 
     # Process the output file
@@ -354,7 +364,7 @@ permanent,\
             collecting_software=0
         elif [ "$collecting_software" = "1" ] && [ -n "$line" ]; then
             # Process software line if not empty and ensure UTF-8
-            echo "$line" | iconv -f utf8 -t utf8//TRANSLIT >> "$SOFTWARE_OUTPUT_FILE" 2>/dev/null
+            echo "$line" | iconv -f utf8 -t utf8//TRANSLIT >> "$SOFTWARE_OUTPUT_FILE"
         fi
     done < "$TMP_DIR/output.txt"
 
