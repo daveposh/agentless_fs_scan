@@ -7,6 +7,7 @@ NC='\033[0m' # No Color
 
 # Output CSV file
 OUTPUT_FILE="system_inventory.csv"
+SOFTWARE_OUTPUT_FILE="software_inventory.csv"
 
 # Static values
 declare -A STATIC_DATA=(
@@ -82,29 +83,13 @@ collect_system_info() {
     fi
     
     echo -e "${GREEN}Collecting information for $ip...${NC}" >&2
-    
-    # Debug output to verify static data
-    echo "Debug: Static Data Values:" >&2
-    for key in "${!STATIC_DATA[@]}"; do
-        echo "  $key = ${STATIC_DATA[$key]}" >&2
-    done
-    
-    # Get absolute paths for files
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    OUTPUT_FILE="$SCRIPT_DIR/system_inventory.csv"
-    SOFTWARE_OUTPUT_FILE="$SCRIPT_DIR/software_inventory.csv"
-    
-    echo "Debug: Using output files:" >&2
-    echo "  System inventory: $OUTPUT_FILE" >&2
-    echo "  Software inventory: $SOFTWARE_OUTPUT_FILE" >&2
 
     # Try SSH connection with key-based auth
     echo -e "${GREEN}Testing SSH connection to $ip...${NC}" >&2
-    if ! ssh -v -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "echo 'SSH test successful'" 2>&1; then
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "echo 'SSH test successful'" >/dev/null 2>&1; then
         echo -e "${RED}Cannot SSH to $ip - Please check SSH key authentication is set up${NC}" >&2
         return 1
     fi
-    echo "Debug: SSH test successful" >&2
 
     # Create a temporary directory for output
     TMP_DIR=$(mktemp -d)
@@ -121,18 +106,19 @@ collect_system_info() {
     export ENVIRONMENT="${STATIC_DATA[Environment]}"
 
     echo -e "${GREEN}Collecting system information from $ip...${NC}"
-    ssh -v -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "
+    ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no "$ip" "
         hostname=\$(hostname)
         os=\$(cat /etc/os-release | grep 'PRETTY_NAME' | cut -d '=' -f 2 | tr -d '\"')
         os_version=\$(cat /etc/os-release | grep 'VERSION_ID' | cut -d '=' -f 2 | tr -d '\"')
         kernel=\$(uname -r)
         memory_mb=\$(free -m | awk '/^Mem:/{print \$2}')
-        memory=\$(( (memory_mb + 1023) / 1024 ))
+        memory=\$(( (memory_mb + 500) / 1000 ))
         disk_space=\$(df -BG / | awk 'NR==2 {print \$2}' | tr -d 'G')
         cpu_speed=\$(lscpu | grep 'CPU MHz' | awk '{print \$3/1000}')
         cpu_cores=\$(nproc)
         mac_addresses=\$(ip link | awk '/link\/ether/{print \$2}' | paste -sd ';' -)
         ip_addresses=\$(ip -4 addr show | grep inet | awk '{print \$2}' | cut -d '/' -f 1 | grep -v '^127\.' | paste -sd ';' -)
+        public_ip=\$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "N/A")
         
         if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
             serial_number=\$(sudo dmidecode -s system-serial-number 2>/dev/null || echo 'N/A')
@@ -141,6 +127,24 @@ collect_system_info() {
             echo \"Warning: sudo access not available for dmidecode commands\" >&2
             serial_number='No sudo access'
             uuid='No sudo access'
+        fi
+        
+        # Initialize AWS-specific variables
+        region=""
+        availability_zone=""
+        
+        # Check if this is an EC2 instance
+        if [[ \"\$serial_number\" == ec2* ]]; then
+            # Get EC2 metadata using IMDSv2
+            TOKEN=\$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+            if [ -n "\$TOKEN" ]; then
+                availability_zone=\$(curl -s -H "X-aws-ec2-metadata-token: \$TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone 2>/dev/null)
+                region=\$(echo "\$availability_zone" | sed 's/[a-z]$//')
+            else
+                # Fallback to IMDSv1 if IMDSv2 fails
+                availability_zone=\$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone 2>/dev/null)
+                region=\$(echo "\$availability_zone" | sed 's/[a-z]$//')
+            fi
         fi
         
         last_login=\$(last -1 -R | head -1 | awk '{print \$1}')
@@ -165,8 +169,63 @@ collect_system_info() {
                 for site in /etc/nginx/sites-enabled/*; do
                     if [ -f \"\$site\" ]; then
                         site_name=\$(basename \"\$site\")
-                        server_name=\$(grep -h \"server_name\" \"\$site\" 2>/dev/null | head -1 | sed 's/server_name//g' | tr -d ';' | xargs)
-                        description+=\"<li>\$site_name (\$server_name)</li>\"
+                        
+                        # Extract server block content
+                        server_blocks=\$(awk '/server[[:space:]]*{/,/}/' \"\$site\")
+                        
+                        # Process each server block
+                        echo \"\$server_blocks\" | while IFS= read -r line; do
+                            if [[ \"\$line\" =~ server_name[[:space:]]+(.*)\; ]]; then
+                                server_names=\${BASH_REMATCH[1]}
+                            elif [[ \"\$line\" =~ listen[[:space:]]+(.*)\; ]]; then
+                                listen_port=\$(echo \"\${BASH_REMATCH[1]}\" | grep -o '[0-9]\\+' | head -1)
+                                if [[ \"\$line\" == *ssl* ]]; then
+                                    ssl=\"true\"
+                                fi
+                            elif [[ \"\$line\" =~ root[[:space:]]+(.*)\; ]]; then
+                                root_dir=\${BASH_REMATCH[1]}
+                            fi
+                        done
+                        
+                        # Default to port 80 if not specified
+                        if [ -z \"\$listen_port\" ]; then
+                            listen_port=\"80\"
+                        fi
+                        
+                        # If no server_name found or it's _, use IP address
+                        if [ -z \"\$server_names\" ] || [ \"\$server_names\" = \"_\" ]; then
+                            server_names=\"\$ip_addresses\"
+                        fi
+                        
+                        # Determine protocol based on SSL directive and port
+                        protocol=\"http\"
+                        if [ \"\$ssl\" = \"true\" ] || [ \"\$listen_port\" = \"443\" ]; then
+                            protocol=\"https\"
+                        fi
+                        
+                        # For each server name, create a URL
+                        for server_name in \$server_names; do
+                            # Clean up server name
+                            server_name=\$(echo \"\$server_name\" | tr -d ' ')
+                            
+                            # Create URL based on port
+                            if [ \"\$listen_port\" = \"80\" ] && [ \"\$protocol\" = \"http\" ]; then
+                                url=\"<a href=\\\"http://\$server_name\\\">\$server_name</a>\"
+                            elif [ \"\$listen_port\" = \"443\" ] && [ \"\$protocol\" = \"https\" ]; then
+                                url=\"<a href=\\\"https://\$server_name\\\">\$server_name</a>\"
+                            else
+                                url=\"<a href=\\\"\$protocol://\$server_name:\$listen_port\\\">\$server_name:\$listen_port</a>\"
+                            fi
+                            
+                            # Add root directory if available
+                            if [ -n \"\$root_dir\" ]; then
+                                root_info=\" (Document Root: \$root_dir)\"
+                            else
+                                root_info=\"\"
+                            fi
+                            
+                            description+=\"<li>\$site_name - \$url\$root_info</li>\"
+                        done
                     fi
                 done
                 description+=\"</ul>\"
@@ -181,28 +240,29 @@ collect_system_info() {
             description=\"<p>Server Info: \$hostname (\$ip_addresses)</p>\"
         fi
         
-        echo \"SYSINFO:\$hostname,\
-${STATIC_DATA[Asset_Type]},\
+        {
+            echo \"SYSINFO:\$hostname,\
+Server,\
 \$serial_number,\
-${STATIC_DATA[Impact]},\
+High,\
 \$description,\
-${STATIC_DATA[End_of_Life]},\
+,\
 yes,\
-${STATIC_DATA[Usage_Type]},\
-${STATIC_DATA[Created_by_-_Source]},\
+permanent,\
+System Inventory Scanner,\
 ,\
 \$discovery_date,\
-${STATIC_DATA[Created_by_-_Source]},\
+System Inventory Scanner,\
 ,\
 \$discovery_date,\
-${STATIC_DATA[Created_by_-_Source]},\
+System Inventory Scanner,\
 ,\
-${STATIC_DATA[Department]},\
-,\
-,\
+IT,\
 ,\
 ,\
-${STATIC_DATA[Workspace]},\
+,\
+,\
+My Team,\
 \$product,\
 ,\
 ,\
@@ -214,10 +274,10 @@ Active,\
 \$serial_number,\
 \$discovery_date,\
 Server,\
-${STATIC_DATA[Physical_Subtype]},\
+,\
 \$virtual_subtype,\
-,\
-,\
+\$region,\
+\$availability_zone,\
 \$os,\
 \$os_version,\
 ,\
@@ -234,28 +294,42 @@ ${STATIC_DATA[Physical_Subtype]},\
 \$last_login,\
 ,\
 ,\
-,\
+\$public_ip,\
 Active,\
 ,\
 ,\
 \$discovery_date,\
 \$server_function,\
-${STATIC_DATA[Environment]},\
-${STATIC_DATA[Usage_Type]},\
+PROD,\
+permanent,\
 ,\
 ,\
 ,\
 \$system_age\"
 
-        echo \"SOFTWARE_START\"
-        dpkg-query -W -f='\${Package},\${Version},\${Status}\n' | while IFS=',' read -r pkg version status; do
-            if [[ \$status == *\"installed\"* ]]; then
-                location=\$(dpkg -L \"\$pkg\" 2>/dev/null | grep -m 1 '/usr/bin\|/usr/sbin\|/usr/local/bin' || echo 'N/A')
-                echo \"\$hostname,\$pkg,\$version,\$location\"
-            fi
-        done
-        echo \"SOFTWARE_END\"
-    " | while IFS= read -r line; do
+            echo \"SOFTWARE_START\"
+            dpkg-query -W -f='\${Package},\${Version},\${Status}\n' 2>/dev/null | while IFS=',' read -r pkg version status; do
+                if [[ \"\$status\" == *\"installed\"* ]]; then
+                    location=\$(dpkg -L \"\$pkg\" 2>/dev/null | grep -m 1 '/usr/bin\|/usr/sbin\|/usr/local/bin' || echo 'N/A')
+                    echo \"\$hostname,\$pkg,\$version,\$location\" 2>/dev/null
+                fi
+            done
+            echo \"SOFTWARE_END\"
+        } 2>/dev/null
+    " > "$TMP_DIR/output.txt"
+
+    # Create CSV files with headers if they don't exist
+    if [ ! -f "$OUTPUT_FILE" ]; then
+        echo "Name,Asset Type,Asset Tag,Impact,Description,End of Life,Discovery Enabled,Usage Type,Created by - Source,Created by - User,Created At,Last updated by - Source,Last updated by - User,Updated At,Sources,Location,Department,Managed By,Used By,Group,Assigned on,Workspace,Product,Vendor,Cost,Warranty,Acquisition Date,Warranty Expiry Date,Domain,Asset State,Serial Number,Last Audit Date,Type,Physical Subtype,Virtual Subtype,Region,Availability Zone,OS,OS Version,OS Service Pack,Memory(GB),Disk Space(GB),CPU Speed(GHz),CPU Core Count,MAC Address,UUID,Hostname,IP Address,IP Address 2,Shared IP,Last login by,Item ID,Item Name,Public Address,State,Instance Type,Provider,Creation Timestamp,Server Function,Environment,Usage Type,Book Value($),Used by (Name),Managed by (Name),system age" > "$OUTPUT_FILE"
+    fi
+
+    if [ ! -f "$SOFTWARE_OUTPUT_FILE" ]; then
+        echo "hostname,product,version,location" > "$SOFTWARE_OUTPUT_FILE"
+    fi
+
+    # Process the output file
+    collecting_software=0
+    while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$line" == SYSINFO:* ]]; then
             # Extract system information (remove SYSINFO: prefix)
             echo "${line#SYSINFO:}" > "$LOCAL_SYSTEM_TMP"
@@ -265,14 +339,11 @@ ${STATIC_DATA[Usage_Type]},\
         elif [[ "$line" == SOFTWARE_END ]]; then
             # Stop collecting software information
             collecting_software=0
-        elif [ "$collecting_software" = "1" ]; then
-            # Process software line
-            pkg_name=$(echo "$line" | cut -d',' -f2)
-            if ! is_blocked "$pkg_name"; then
-                echo "$line" >> "$SOFTWARE_OUTPUT_FILE"
-            fi
+        elif [ "$collecting_software" = "1" ] && [ -n "$line" ]; then
+            # Process software line if not empty
+            echo "$line" >> "$SOFTWARE_OUTPUT_FILE" 2>/dev/null
         fi
-    done
+    done < "$TMP_DIR/output.txt"
 
     # Append system information if collected
     if [ -s "$LOCAL_SYSTEM_TMP" ]; then
