@@ -35,7 +35,8 @@ declare -a BLOCKLIST
 
 # Function to sanitize CSV values
 sanitize_csv() {
-    echo "$1" | sed 's/,/;/g' | sed 's/"/'"'"'/g'
+    # Convert to UTF-8 and escape special characters
+    echo "$1" | iconv -f utf8 -t utf8//TRANSLIT | sed 's/,/;/g' | sed 's/"/'"'"'/g'
 }
 
 # Function to read blocklist
@@ -151,7 +152,15 @@ collect_system_info() {
         discovery_date=\$(date '+%Y-%m-%d %H:%M')
         domain=\$(dnsdomainname 2>/dev/null || echo 'N/A')
         
-        system_age=\$(date -d @\$(stat -c %W /) \"+%Y-%m-%d %H:%M\" 2>/dev/null || date -d @\$(stat -c %Y /) \"+%Y-%m-%d %H:%M\")
+        # Format system age date consistently
+        system_age=\$(date -d @\$(stat -c %W / 2>/dev/null || stat -c %Y /) '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'N/A')
+
+        # Format last login date if available
+        if [ -n "\$last_login" ]; then
+            last_login_date=\$(last -1 -R \$last_login | head -1 | awk '{print \$5,\$6,\$7,\$8}' | xargs -I{} date -d "{}" '+%Y-%m-%d %H:%M' 2>/dev/null || echo \$last_login)
+        else
+            last_login_date=""
+        fi
 
         if [[ \"\$serial_number\" == *\"VMware\"* ]]; then
             product=\"VMware Vcenter VM\"
@@ -291,7 +300,7 @@ Server,\
 \$ip_addresses,\
 ,\
 ,\
-\$last_login,\
+\$last_login_date,\
 ,\
 ,\
 \$public_ip,\
@@ -320,19 +329,23 @@ permanent,\
 
     # Create CSV files with headers if they don't exist
     if [ ! -f "$OUTPUT_FILE" ]; then
-        echo "Name,Asset Type,Asset Tag,Impact,Description,End of Life,Discovery Enabled,Usage Type,Created by - Source,Created by - User,Created At,Last updated by - Source,Last updated by - User,Updated At,Sources,Location,Department,Managed By,Used By,Group,Assigned on,Workspace,Product,Vendor,Cost,Warranty,Acquisition Date,Warranty Expiry Date,Domain,Asset State,Serial Number,Last Audit Date,Type,Physical Subtype,Virtual Subtype,Region,Availability Zone,OS,OS Version,OS Service Pack,Memory(GB),Disk Space(GB),CPU Speed(GHz),CPU Core Count,MAC Address,UUID,Hostname,IP Address,IP Address 2,Shared IP,Last login by,Item ID,Item Name,Public Address,State,Instance Type,Provider,Creation Timestamp,Server Function,Environment,Usage Type,Book Value($),Used by (Name),Managed by (Name),system age" > "$OUTPUT_FILE"
+        # Add UTF-8 BOM and header
+        printf '\xEF\xBB\xBF' > "$OUTPUT_FILE"
+        echo "Name,Asset Type,Asset Tag,Impact,Description,End of Life,Discovery Enabled,Usage Type,Created by - Source,Created by - User,Created At,Last updated by - Source,Last updated by - User,Updated At,Sources,Location,Department,Managed By,Used By,Group,Assigned on,Workspace,Product,Vendor,Cost,Warranty,Acquisition Date,Warranty Expiry Date,Domain,Asset State,Serial Number,Last Audit Date,Type,Physical Subtype,Virtual Subtype,Region,Availability Zone,OS,OS Version,OS Service Pack,Memory(GB),Disk Space(GB),CPU Speed(GHz),CPU Core Count,MAC Address,UUID,Hostname,IP Address,IP Address 2,Shared IP,Last login by,Item ID,Item Name,Public Address,State,Instance Type,Provider,Creation Timestamp,Server Function,Environment,Usage Type,Book Value($),Used by (Name),Managed by (Name),system age" >> "$OUTPUT_FILE"
     fi
 
     if [ ! -f "$SOFTWARE_OUTPUT_FILE" ]; then
-        echo "hostname,product,version,location" > "$SOFTWARE_OUTPUT_FILE"
+        # Add UTF-8 BOM and header
+        printf '\xEF\xBB\xBF' > "$SOFTWARE_OUTPUT_FILE"
+        echo "hostname,product,version,location" >> "$SOFTWARE_OUTPUT_FILE"
     fi
 
     # Process the output file
     collecting_software=0
     while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$line" == SYSINFO:* ]]; then
-            # Extract system information (remove SYSINFO: prefix)
-            echo "${line#SYSINFO:}" > "$LOCAL_SYSTEM_TMP"
+            # Extract system information (remove SYSINFO: prefix) and ensure UTF-8
+            echo "${line#SYSINFO:}" | iconv -f utf8 -t utf8//TRANSLIT > "$LOCAL_SYSTEM_TMP"
         elif [[ "$line" == SOFTWARE_START ]]; then
             # Start collecting software information
             collecting_software=1
@@ -340,8 +353,8 @@ permanent,\
             # Stop collecting software information
             collecting_software=0
         elif [ "$collecting_software" = "1" ] && [ -n "$line" ]; then
-            # Process software line if not empty
-            echo "$line" >> "$SOFTWARE_OUTPUT_FILE" 2>/dev/null
+            # Process software line if not empty and ensure UTF-8
+            echo "$line" | iconv -f utf8 -t utf8//TRANSLIT >> "$SOFTWARE_OUTPUT_FILE" 2>/dev/null
         fi
     done < "$TMP_DIR/output.txt"
 
