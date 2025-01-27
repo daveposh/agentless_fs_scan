@@ -158,10 +158,10 @@ collect_system_info() {
                 region=\$(echo "\$availability_zone" | sed 's/[a-z]$//')
                 ec2_instance_type=\$(curl -s -H "X-aws-ec2-metadata-token: \$TOKEN" http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
                 
-                location="AWS \$region"
+                location='AWS '\$region
                 vendor='Amazon EC2'
                 instance_type='Virtual'
-                virtual_subtype="Amazon EC2 instance - \$ec2_instance_type"
+                virtual_subtype='Amazon EC2 instance - '\$ec2_instance_type
                 product='EC2 Instance'
             fi
         else
