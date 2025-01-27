@@ -1,5 +1,12 @@
 #!/bin/bash
 #
+# At the start of the script, after the shebang
+# Ensure bash version >= 4 for associative arrays
+if ((BASH_VERSINFO[0] < 4)); then
+   echo "This script requires bash version 4 or higher"
+   exit 1
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,8 +16,11 @@ NC='\033[0m' # No Color
 OUTPUT_FILE="system_inventory.csv"
 SOFTWARE_OUTPUT_FILE="software_inventory.csv"
 
-# Static values
-declare -A STATIC_DATA=(
+# Declare global associative array at script level
+declare -A STATIC_DATA
+
+# Initialize static values
+STATIC_DATA=(
     ["Impact"]="High"
     ["Asset_Type"]="Server"
     ["End_of_Life"]=""
@@ -21,17 +31,6 @@ declare -A STATIC_DATA=(
     ["Workspace"]="My Team"
     ["Environment"]="PROD"
 )
-
-# At the start of the script, after the shebang
-# Ensure bash version >= 4 for associative arrays
-if ((BASH_VERSINFO[0] < 4)); then
-   echo "This script requires bash version 4 or higher"
-   exit 1
-fi
-
-# Declare global associative array at script level
-declare -A STATIC_DATA
-declare -a BLOCKLIST
 
 # Function to sanitize CSV values
 sanitize_csv() {
@@ -125,11 +124,8 @@ collect_system_info() {
             serial_number=\$(sudo dmidecode -s system-serial-number 2>/dev/null || echo '')
             uuid=\$(sudo dmidecode -s system-uuid 2>/dev/null || echo 'N/A')
             
-            # Generate random serial if not found or empty
-            if [ -z "\$serial_number" ] || [ "\$serial_number" = "Not Specified" ] || [ "\$serial_number" = "N/A" ]; then
-                timestamp=\$(date '+%Y%m%d%H%M%S')
-                serial_number="CXI-\$timestamp"
-            fi
+            # Clean up the serial number
+            serial_number=\$(echo "\$serial_number" | tr -d '\\r\\n\\t')
         else
             echo \"Warning: sudo access not available for dmidecode commands\" >&2
             timestamp=\$(date '+%Y%m%d%H%M%S')
@@ -137,46 +133,51 @@ collect_system_info() {
             uuid='No sudo access'
         fi
         
-        # Set asset tag to be the same as serial number
-        asset_tag=\$serial_number
-        
-        # Initialize AWS-specific variables
+        # Initialize variables
         region=""
         availability_zone=""
         location=""
         vendor=""
         instance_type=""
         virtual_subtype=""
-        
-        # Check if this is an EC2 instance
-        if [[ "\$serial_number" == ec2* ]]; then
-            # Get EC2 metadata using IMDSv2
+        product="SERVER"
+
+        # First determine if this is a VMware VM
+        if echo "\$serial_number" | grep -q "VMware"; then
+            # This is a VMware VM
+            product='VMware Virtual Machine'
+            virtual_subtype='VMware'
+            instance_type='Virtual'
+            vendor='VMware'
+            # Keep the VMware serial number as is - it's the asset tag
+        elif echo "\$serial_number" | grep -q "^ec2"; then
+            # This is an AWS EC2 instance
             TOKEN=\$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
             if [ -n "\$TOKEN" ]; then
-                # Get AWS metadata
                 availability_zone=\$(curl -s -H "X-aws-ec2-metadata-token: \$TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone 2>/dev/null)
                 region=\$(echo "\$availability_zone" | sed 's/[a-z]$//')
                 ec2_instance_type=\$(curl -s -H "X-aws-ec2-metadata-token: \$TOKEN" http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
-            else
-                # Fallback to IMDSv1 if IMDSv2 fails
-                availability_zone=\$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone 2>/dev/null)
-                region=\$(echo "\$availability_zone" | sed 's/[a-z]$//')
-                ec2_instance_type=\$(curl -s http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
+                
+                location="AWS \$region"
+                vendor='Amazon EC2'
+                instance_type='Virtual'
+                virtual_subtype="Amazon EC2 instance - \$ec2_instance_type"
+                product='EC2 Instance'
             fi
-
-            # Set AWS-specific values
-            location="AWS \$region"
-            vendor="Amazon EC2"
-            instance_type="Virtual"
-            virtual_subtype="Amazon EC2 instance (\$ec2_instance_type)"
-            product="EC2 Instance"
-        elif [[ "\$serial_number" == *"VMware"* ]]; then
-            product="VMware Vcenter VM"
-            virtual_subtype="VMware"
         else
-            product="SERVER"
-            virtual_subtype=""
+            # Physical server or unknown type
+            if [ -z "\$serial_number" ] || [ "\$serial_number" = "Not Specified" ] || [ "\$serial_number" = "N/A" ] || [ "\$serial_number" = "None" ]; then
+                timestamp=\$(date '+%Y%m%d%H%M%S')
+                serial_number="CXI-\$timestamp"
+            fi
+            instance_type=''
+            virtual_subtype=''
+            product='SERVER'
+            vendor=''
         fi
+        
+        # Set asset tag to be the same as serial number
+        asset_tag=\$serial_number
         
         last_login=\$(last -1 -R | head -1 | awk '{print \$1}')
         discovery_date=\$(date '+%Y-%m-%d %H:%M')
@@ -186,7 +187,7 @@ collect_system_info() {
         system_age=\$(date -d @\$(stat -c %W / 2>/dev/null || stat -c %Y /) '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'N/A')
 
         # Format last login date if available
-        if [ -n "\$last_login" ]; then
+        if [ x"\$last_login" != x"" ]; then
             last_login_date=\$(last -1 -R \$last_login | head -1 | awk '{print \$5,\$6,\$7,\$8}' | xargs -I{} date -d "{}" '+%Y-%m-%d %H:%M' 2>/dev/null || echo \$last_login)
         else
             last_login_date=""
@@ -210,7 +211,7 @@ collect_system_info() {
                                 server_names=\${BASH_REMATCH[1]}
                             elif [[ \"\$line\" =~ listen[[:space:]]+(.*)\; ]]; then
                                 listen_port=\$(echo \"\${BASH_REMATCH[1]}\" | grep -o '[0-9]\\+' | head -1)
-                                if [[ \"\$line\" == *ssl* ]]; then
+                                if [[ \"\$line\" = *ssl* ]]; then
                                     ssl=\"true\"
                                 fi
                             elif [[ \"\$line\" =~ root[[:space:]]+(.*)\; ]]; then
@@ -219,18 +220,18 @@ collect_system_info() {
                         done
                         
                         # Default to port 80 if not specified
-                        if [ -z \"\$listen_port\" ]; then
+                        if [ x"\$listen_port" = x"" ]; then
                             listen_port=\"80\"
                         fi
                         
                         # If no server_name found or it's _, use IP address
-                        if [ -z \"\$server_names\" ] || [ \"\$server_names\" = \"_\" ]; then
+                        if [ x"\$server_names" = x"" ] || [ x"\$server_names" = x"_" ]; then
                             server_names=\"\$ip_addresses\"
                         fi
                         
                         # Determine protocol based on SSL directive and port
                         protocol=\"http\"
-                        if [ \"\$ssl\" = \"true\" ] || [ \"\$listen_port\" = \"443\" ]; then
+                        if [ x"\$ssl" = x"true" ] || [ x"\$listen_port" = x"443" ]; then
                             protocol=\"https\"
                         fi
                         
