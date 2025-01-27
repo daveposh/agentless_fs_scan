@@ -35,8 +35,8 @@ declare -a BLOCKLIST
 
 # Function to sanitize CSV values
 sanitize_csv() {
-    # Convert to UTF-8 and escape special characters
-    echo "$1" | iconv -f utf8 -t utf8//TRANSLIT | sed 's/,/;/g' | sed 's/"/'"'"'/g'
+    # Simple CSV value escaping
+    echo "$1" | sed 's/,/;/g' | sed 's/"/'"'"'/g'
 }
 
 # Function to read blocklist
@@ -122,30 +122,60 @@ collect_system_info() {
         public_ip=\$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "N/A")
         
         if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-            serial_number=\$(sudo dmidecode -s system-serial-number 2>/dev/null || echo 'N/A')
+            serial_number=\$(sudo dmidecode -s system-serial-number 2>/dev/null || echo '')
             uuid=\$(sudo dmidecode -s system-uuid 2>/dev/null || echo 'N/A')
+            
+            # Generate random serial if not found or empty
+            if [ -z "\$serial_number" ] || [ "\$serial_number" = "Not Specified" ] || [ "\$serial_number" = "N/A" ]; then
+                timestamp=\$(date '+%Y%m%d%H%M%S')
+                serial_number="CXI-\$timestamp"
+            fi
         else
             echo \"Warning: sudo access not available for dmidecode commands\" >&2
-            serial_number='No sudo access'
+            timestamp=\$(date '+%Y%m%d%H%M%S')
+            serial_number="CXI-\$timestamp"
             uuid='No sudo access'
         fi
+        
+        # Set asset tag to be the same as serial number
+        asset_tag=\$serial_number
         
         # Initialize AWS-specific variables
         region=""
         availability_zone=""
+        location=""
+        vendor=""
+        instance_type=""
+        virtual_subtype=""
         
         # Check if this is an EC2 instance
-        if [[ \"\$serial_number\" == ec2* ]]; then
+        if [[ "\$serial_number" == ec2* ]]; then
             # Get EC2 metadata using IMDSv2
             TOKEN=\$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
             if [ -n "\$TOKEN" ]; then
+                # Get AWS metadata
                 availability_zone=\$(curl -s -H "X-aws-ec2-metadata-token: \$TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone 2>/dev/null)
                 region=\$(echo "\$availability_zone" | sed 's/[a-z]$//')
+                ec2_instance_type=\$(curl -s -H "X-aws-ec2-metadata-token: \$TOKEN" http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
             else
                 # Fallback to IMDSv1 if IMDSv2 fails
                 availability_zone=\$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone 2>/dev/null)
                 region=\$(echo "\$availability_zone" | sed 's/[a-z]$//')
+                ec2_instance_type=\$(curl -s http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null)
             fi
+
+            # Set AWS-specific values
+            location="AWS \$region"
+            vendor="Amazon EC2"
+            instance_type="Virtual"
+            virtual_subtype="Amazon EC2 instance (\$ec2_instance_type)"
+            product="EC2 Instance"
+        elif [[ "\$serial_number" == *"VMware"* ]]; then
+            product="VMware Vcenter VM"
+            virtual_subtype="VMware"
+        else
+            product="SERVER"
+            virtual_subtype=""
         fi
         
         last_login=\$(last -1 -R | head -1 | awk '{print \$1}')
@@ -160,14 +190,6 @@ collect_system_info() {
             last_login_date=\$(last -1 -R \$last_login | head -1 | awk '{print \$5,\$6,\$7,\$8}' | xargs -I{} date -d "{}" '+%Y-%m-%d %H:%M' 2>/dev/null || echo \$last_login)
         else
             last_login_date=""
-        fi
-
-        if [[ \"\$serial_number\" == *\"VMware\"* ]]; then
-            product=\"VMware Vcenter VM\"
-            virtual_subtype=\"VMware\"
-        else
-            product=\"SERVER\"
-            virtual_subtype=\"\"
         fi
 
         if pgrep -f \"nginx\" >/dev/null; then
@@ -252,7 +274,7 @@ collect_system_info() {
         {
             echo \"SYSINFO:\$hostname,\
 Server,\
-\$serial_number,\
+\$asset_tag,\
 High,\
 \$description,\
 ,\
@@ -265,7 +287,7 @@ System Inventory Scanner,\
 ,\
 \$discovery_date,\
 System Inventory Scanner,\
-,\
+\$location,\
 IT,\
 ,\
 ,\
@@ -273,7 +295,7 @@ IT,\
 ,\
 My Team,\
 \$product,\
-,\
+\$vendor,\
 ,\
 ,\
 ,\
@@ -282,7 +304,7 @@ My Team,\
 Active,\
 \$serial_number,\
 \$discovery_date,\
-Server,\
+\$instance_type,\
 ,\
 \$virtual_subtype,\
 \$region,\
@@ -339,14 +361,10 @@ permanent,\
 
     # Create CSV files with headers if they don't exist
     if [ ! -f "$OUTPUT_FILE" ]; then
-        # Add UTF-8 BOM and header
-        printf '\xEF\xBB\xBF' > "$OUTPUT_FILE"
-        echo "Name,Asset Type,Asset Tag,Impact,Description,End of Life,Discovery Enabled,Usage Type,Created by - Source,Created by - User,Created At,Last updated by - Source,Last updated by - User,Updated At,Sources,Location,Department,Managed By,Used By,Group,Assigned on,Workspace,Product,Vendor,Cost,Warranty,Acquisition Date,Warranty Expiry Date,Domain,Asset State,Serial Number,Last Audit Date,Type,Physical Subtype,Virtual Subtype,Region,Availability Zone,OS,OS Version,OS Service Pack,Memory(GB),Disk Space(GB),CPU Speed(GHz),CPU Core Count,MAC Address,UUID,Hostname,IP Address,IP Address 2,Shared IP,Last login by,Item ID,Item Name,Public Address,State,Instance Type,Provider,Creation Timestamp,Server Function,Environment,Usage Type,Book Value($),Used by (Name),Managed by (Name),system age" >> "$OUTPUT_FILE"
+        echo "Name,Asset Type,Asset Tag,Impact,Description,End of Life,Discovery Enabled,Usage Type,Created by - Source,Created by - User,Created At,Last updated by - Source,Last updated by - User,Updated At,Sources,Location,Department,Managed By,Used By,Group,Assigned on,Workspace,Product,Vendor,Cost,Warranty,Acquisition Date,Warranty Expiry Date,Domain,Asset State,Serial Number,Last Audit Date,Type,Physical Subtype,Virtual Subtype,Region,Availability Zone,OS,OS Version,OS Service Pack,Memory(GB),Disk Space(GB),CPU Speed(GHz),CPU Core Count,MAC Address,UUID,Hostname,IP Address,IP Address 2,Shared IP,Last login by,Item ID,Item Name,Public Address,State,Instance Type,Provider,Creation Timestamp,Server Function,Environment,Usage Type,Book Value($),Used by (Name),Managed by (Name),system age" > "$OUTPUT_FILE"
     fi
 
     if [ ! -f "$SOFTWARE_OUTPUT_FILE" ]; then
-        # Add UTF-8 BOM and header
-        printf '\xEF\xBB\xBF' > "$SOFTWARE_OUTPUT_FILE"
         echo "hostname,product,version,location" > "$SOFTWARE_OUTPUT_FILE"
     fi
 
@@ -354,8 +372,8 @@ permanent,\
     collecting_software=0
     while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$line" == SYSINFO:* ]]; then
-            # Extract system information (remove SYSINFO: prefix) and ensure UTF-8
-            echo "${line#SYSINFO:}" | iconv -f utf8 -t utf8//TRANSLIT > "$LOCAL_SYSTEM_TMP"
+            # Extract system information (remove SYSINFO: prefix)
+            echo "${line#SYSINFO:}" > "$LOCAL_SYSTEM_TMP"
         elif [[ "$line" == SOFTWARE_START ]]; then
             # Start collecting software information
             collecting_software=1
@@ -363,8 +381,8 @@ permanent,\
             # Stop collecting software information
             collecting_software=0
         elif [ "$collecting_software" = "1" ] && [ -n "$line" ]; then
-            # Process software line if not empty and ensure UTF-8
-            echo "$line" | iconv -f utf8 -t utf8//TRANSLIT >> "$SOFTWARE_OUTPUT_FILE"
+            # Process software line if not empty
+            echo "$line" >> "$SOFTWARE_OUTPUT_FILE"
         fi
     done < "$TMP_DIR/output.txt"
 

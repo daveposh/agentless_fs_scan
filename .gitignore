@@ -1,0 +1,11 @@
+# System inventory output files
+system_inventory.csv
+software_inventory.csv
+
+# Temporary files
+*.tmp
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db 
