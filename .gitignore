@@ -1,6 +1,9 @@
 # System inventory output files
 system_inventory.csv
 software_inventory.csv
+static_data.conf
+system_inventory.conf
+linux.csv
 
 # Temporary files
 *.tmp
